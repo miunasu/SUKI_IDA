@@ -6,6 +6,9 @@ IDA 是最强大的逆向分析工具，她拥有强大的反编译引擎，所�
 
 # Set up
 Put SUKI_IDA folder and SUKI_IDA_PLUGIN.py file into IDA plugin folder.  
+You can selectively close the functions you don't want by turn off the switch.  
+
+![](./DOC/picture/switch.png)
 
 # Tool list 
 ## Dynamic Variables Check
@@ -33,6 +36,7 @@ EFC 是一个能帮助你区分恶意函数和伪造导出函数的小工具。
 [README_EFC](./DOC/README_EFC.md)
 
 # Support
+Continuously updating...  
 The plugin suport 7.4 between 9.x.  
 If you have any question or idea, please open an issue on GitHub.  
 

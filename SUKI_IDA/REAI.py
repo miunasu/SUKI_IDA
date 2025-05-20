@@ -7,6 +7,11 @@ import ida_hexrays
 import urllib3
 import threading
 import queue
+import ida_kernwin
+import ida_loader
+from transformers import AutoTokenizer
+import tiktoken
+
 
 urllib3.disable_warnings()
 
@@ -27,26 +32,38 @@ API_KEY = "api_key"
 API_URL = "api_url"  
 MODEL = "model name"  
 
-# prompt language
-chinese_prompt = "你是一个恶意代码分析师,现在分析一个C语言函数,以json格式把结果返回给我,要求包含两个对象,'des':对该函数功能的中文描述。'name':给该函数一个合适的英文名称。代码如下："
-english_prompt = "You are a malware analyst. Now analyze a C language function and return the result to me in JSON format. The result should contain two objects: 'des' — a English description of the function's purpose, and 'name' — an appropriate English name for the function. The code is as follows: "
-pre_prompt = english_prompt
+# analyze prompt
+chinese_prompt = "你是一个专业的恶意代码分析师,现在分析ida提供的伪代码,以json格式把结果返回给我,要求包含两个对象,'des':对该函数功能的中文描述。'name':给该函数一个合适的英文名称。代码如下："
+english_prompt = "You are a professional malware analyst. Now analyze ida's pseudocode and return the result to me in JSON format. The result should contain two objects: 'des' — a English description of the function's purpose, and 'name' — an appropriate English name for the function. The code is as follows: "
+analyze_prompt = english_prompt
 
-def chat_with_AI(prompt):
+# conversation prompt
+chinese_conversation_promot = "你是一个专业的恶意代码分析师,现在分析ida提供的伪代码。你需要默认遵守以下要求:0.使用中文回答用户的提问,回答用户对于恶意样本中该函数的疑问。1.函数名称以'AI_'的函数名称和函数注释并非完全可信,变量名称有一部分为自动生成,因此并非所有的变量名称都可信,以你的逻辑推理为准。2.ida提供的伪代码并非完全精准准确,有可能存在一些反编译错误,需要你基于自己的推理逻辑进行对话。3.直接返回回复,回复的格式为普通txt格式,并且在回复中不用再次提及要求的内容。"
+english_conversation_promot = "You are a professional malware analyst, and now you are analyzing the pseudocode provided by ida. You need to comply with the following requirements by default: 0. Use English to answer the user's questions and answer the user's questions about the function in the malicious sample. 1. Function names and function comments with 'AI_' are not completely credible. Some variable names are automatically generated, so not all variable names are credible. Your logical reasoning is the standard. 2. The pseudocode provided by ida is not completely accurate. There may be some decompilation errors. You need to communicate based on your own reasoning logic. 3. Return the reply directly. The format of the reply is ordinary txt format, and there is no need to mention the required content again in the reply."
+conversation_promot = english_conversation_promot
+
+
+# analyze mode don't use memory, because the context limit
+def chat_with_AI(content):
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {API_KEY}"
     }
-
-    payload = {
-        "model": MODEL,  
-        "messages": [
-            {"role": "user", "content": pre_prompt + prompt}
-        ],
-        "temperature": 1.0, # recommend 1.0
-        "max_tokens": 1024
-    }
-
+    
+    if type(content) is list:
+        payload = {
+            "model": MODEL,  
+            "messages": content,
+            "temperature": 0.7 # it you want more creative, set it to 1.0. More rigorous and lower.
+        }  
+    else:
+        payload = {
+            "model": MODEL,  
+            "messages": [
+                {"role": "user", "content": analyze_prompt + content}
+            ],
+            "temperature": 0.7 # it you want more creative, set it to 1.0. More rigorous and lower.
+        }      
 
     try:
         response = requests.post(
@@ -54,14 +71,100 @@ def chat_with_AI(prompt):
             headers=headers,
             data=json.dumps(payload)
         )
-        response.raise_for_status()  
-        result = json.loads(response.json()['choices'][0]['message']['content'].split("```json")[-1].split("```")[0])
+        response.raise_for_status()
+        if type(content) is list:     
+            result = response.json()['choices'][0]['message']['content']
+        else:
+            result = json.loads(response.json()['choices'][0]['message']['content'].split("```json")[-1].split("```")[0])
         return result if response.status_code == 200 else None
 
     except Exception as e:
         print(f"[REAI] error: {type(e).__name__} - {str(e)}")
         print(f'[REAI] text : {response.text}')
         return None
+
+
+# conversation module
+CLI: ida_kernwin.cli_t = None
+func_choose = None
+memory: list[dict] = None
+idb_path = None
+max_tokens = 64000 # 64K
+huggingface_model_name = {
+    "deepseek-chat": "deepseek-ai/DeepSeek-V3-0324",
+    "deepseek-reasoner": "deepseek-ai/DeepSeek-R1"
+}
+
+
+class talk_with_LLM(ida_kernwin.cli_t):
+    flags = 0
+    sname = "REAI"
+    lname  = "REAI"
+    hint = "REAI"
+    locked = False
+    
+    def OnExecuteLine(self, line):
+        if line == "":
+            return False
+        elif self.locked == True:
+            print("[REAI] Please wait for the previous task to finish.")
+            return False
+        elif idb_path != ida_loader.get_path(ida_loader.PATH_TYPE_IDB):
+            print("[REAI] New idb, please choose a function again.")
+            return False
+        
+        if func_choose != None:
+            threading.Thread(target=conversation_thread, args=(line,)).start()
+            self.locked = True
+        else:
+            print("[REAI] Please choose a function.")
+            return False
+        return True
+
+    def OnKeydown(self, line, x, sellen, vkey, shift):
+        pass
+
+
+def conversation_thread(line):
+    global memory
+    global CLI
+    global func_choose
+    if memory == None:
+        print("[REAI] Start conversation, default max tokens: 64000.")
+        memory = []
+        memory.extend([
+            {"role": "system", "content": conversation_promot},
+            {"role": "system", "content": func_choose},
+            {"role": "user", "content": line}
+        ])
+    else:
+        memory.append({"role": "user", "content": line})
+    
+
+    if "gpt" in MODEL:
+        # have not test chatgpt, sry
+        enc = tiktoken.encoding_for_model(MODEL)
+        token_len = len(enc.encode(str(memory)))
+    elif MODEL in huggingface_model_name:
+        tokenizer = AutoTokenizer.from_pretrained(huggingface_model_name[MODEL])
+        token_len = len(tokenizer.encode(str(memory), add_special_tokens=False))
+    else:
+        print("[REAI] Can't calculate token length, continue.")
+        token_len = 0
+    
+    if token_len > max_tokens:
+        print("[REAI] Token limit exceeded. End conversation.")
+        func_choose = None
+        memory = None
+        return False
+    else:
+        print(f"[REAI] Token {token_len}/{max_tokens}")
+        return_content = chat_with_AI(memory)
+
+    CLI.locked = False
+    memory.append({"role": "assistant", "content": return_content})
+    print(f"{MODEL}: {return_content}")
+
 
 # rename function, pre 'AI_' to mark AI recognition
 def rename_function(func_ea, new_name):
@@ -142,10 +245,10 @@ def call_add_func(ea):
         c_func.refresh_func_ctext()
 
     except Exception as e:
-        raise Exception(f"[REAI] Exception during decompilation at {hex(ea)}: {e}")
+        raise Exception(f"[REAI] Exception during decompile at {hex(ea)}: {e}")
 
 
-# jmpout fast check
+# exception code check
 def exception_code_check(ea, caller_ea_arg = 0):
     global exception_code_collection
     global processed_func
@@ -249,8 +352,8 @@ def select_address_check(ea):
     return func.start_ea
 
 
-def AI_work(ea, pseudo_code, func_name):
-    if (api_result := chat_with_AI(pseudo_code)):
+def AI_work(ea, pseudocode, func_name):
+    if (api_result := chat_with_AI(pseudocode)):
         new_func_name = api_result.get("name", func_name)
         description = api_result.get("des", "None")
         info = []
@@ -407,6 +510,25 @@ class call_topology_print(idaapi.action_handler_t):
         print('[REAI] Print call topology:')
         pt()
         function_info = {}
+
+    def update(self, ctx):
+        return idaapi.AST_ENABLE_ALWAYS
+
+
+class conversation(idaapi.action_handler_t):
+    def __init__(self):
+        idaapi.action_handler_t.__init__(self)
+    
+    def activate(self, ctx):
+        global func_choose
+        global memory
+        global idb_path
+        ea = idc.get_screen_ea()
+        select_address_check(ea)
+        func_choose = str(ida_hexrays.decompile(ea))
+        idb_path = ida_loader.get_path(ida_loader.PATH_TYPE_IDB)
+        memory = None
+        print("[REAI] Choose function for conversation successfully!")
 
     def update(self, ctx):
         return idaapi.AST_ENABLE_ALWAYS

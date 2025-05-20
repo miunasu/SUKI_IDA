@@ -116,6 +116,9 @@ class DVC:
     def rename(self, var_value, var):
 
         func_name = self.get_name(var_value)
+        # if code is hollowed in dll, and it's normal function 
+        if "sub_" in func_name:
+            func_name = None
         ret = True
         name_count = 1
         if func_name != None:

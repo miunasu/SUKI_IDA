@@ -27,7 +27,7 @@ def register_actions():
 # Register actions
     # DVC    
     if DynamicVarCheck_switch == True:
-        action1 = idaapi.action_desc_t(
+        block_var_check = idaapi.action_desc_t(
             "DVC:block_var_check",
             "block var check",  
             DynamicVarCheck.block_var_check(),
@@ -36,7 +36,7 @@ def register_actions():
             0
         )
 
-        action2 = idaapi.action_desc_t(
+        func_var_check = idaapi.action_desc_t(
             "DVC:func_var_check",
             "func var check",  
             DynamicVarCheck.func_var_check(),
@@ -45,7 +45,7 @@ def register_actions():
             0
         )
         
-        action3 = idaapi.action_desc_t(
+        sub_func_disassemble = idaapi.action_desc_t(
             "DVC:sub_func_disassemble",
             "sub func disassemble",  
             DynamicVarCheck.sub_func_disassemble(),
@@ -54,9 +54,9 @@ def register_actions():
             0
         )
 
-        idaapi.register_action(action1)
-        idaapi.register_action(action2)
-        idaapi.register_action(action3)
+        idaapi.register_action(block_var_check)
+        idaapi.register_action(func_var_check)
+        idaapi.register_action(sub_func_disassemble)
 
         idaapi.attach_action_to_menu("Debugger/DVC/", "DVC:block_var_check", idaapi.SETMENU_APP)
         idaapi.attach_action_to_menu("Debugger/DVC/", "DVC:func_var_check", idaapi.SETMENU_APP)
@@ -64,7 +64,7 @@ def register_actions():
 
     # REAI
     if REAI_switch == True:
-        action4 = idaapi.action_desc_t(
+        func_analyze = idaapi.action_desc_t(
             "REAI:func_analyze",
             "func_analyze",  # 
             REAI.func_analyze(),
@@ -73,7 +73,7 @@ def register_actions():
             0
         )
 
-        action5 = idaapi.action_desc_t(
+        exception_code_check = idaapi.action_desc_t(
             "REAI:exception_code_check",
             "exception_code_check",  # 
             REAI.exception_code_check_action(),
@@ -82,7 +82,7 @@ def register_actions():
             0
         )
 
-        action6 = idaapi.action_desc_t(
+        call_topology_print = idaapi.action_desc_t(
             "REAI:call_topology_print",
             "call_topology_print",  # 
             REAI.call_topology_print(),
@@ -91,13 +91,23 @@ def register_actions():
             0
         )
 
-        idaapi.register_action(action4)
-        idaapi.register_action(action5)
-        idaapi.register_action(action6)
+        conversation = idaapi.action_desc_t(
+            "REAI:conversation",
+            "conversation",   
+            REAI.conversation(),
+            "", 
+            "LLM conversation",
+            0
+        )
+
+        idaapi.register_action(func_analyze)
+        idaapi.register_action(exception_code_check)
+        idaapi.register_action(call_topology_print)
+        idaapi.register_action(conversation)
 
         # EFC
     if ExportFuncCheck_switch == True:
-        action7 = idaapi.action_desc_t(
+        export_func_check = idaapi.action_desc_t(
             "EFC:export_func_check",
             "export_func_check",  # 
             ExportFuncCheck.export_func_check(),
@@ -106,7 +116,7 @@ def register_actions():
             0
         )
 
-        idaapi.register_action(action7)
+        idaapi.register_action(export_func_check)
 
         idaapi.attach_action_to_menu("View/Open subviews/Export Check", "EFC:export_func_check", idaapi.SETMENU_APP)
 
@@ -123,6 +133,7 @@ def unregister_actions():
         idaapi.unregister_action("REAI:func_analyze")
         idaapi.unregister_action("REAI:exception_code_check") 
         idaapi.unregister_action("REAI:call_topology_print") 
+        idaapi.unregister_action("REAI:conversation")
 
     # EFC
     if ExportFuncCheck_switch == True:
@@ -153,6 +164,8 @@ class SUKI_IDA_PLUGIN(idaapi.plugin_t):
         if REAI_switch == True:
             self.menu = ContextMenuHooks()
             self.menu.hook()
+            REAI.CLI = REAI.talk_with_LLM()
+            REAI.CLI.register()
             print('[REAI] REAI is ready')
             print('[REAI] Right click on pseudocode view')    
             
@@ -182,10 +195,11 @@ class SUKI_IDA_PLUGIN(idaapi.plugin_t):
     def term(self):
 
         unregister_actions()
-
+        
         # REAI
         if REAI_switch == True:
             self.menu.unhook()
+            REAI.CLI.unregister()
 
 def PLUGIN_ENTRY():
     return SUKI_IDA_PLUGIN()
@@ -199,3 +213,4 @@ class ContextMenuHooks(idaapi.UI_Hooks):
                 idaapi.attach_action_to_popup(form, popup, "REAI:func_analyze", "REAI/")
                 idaapi.attach_action_to_popup(form, popup, "REAI:exception_code_check", "REAI/")
                 idaapi.attach_action_to_popup(form, popup, "REAI:call_topology_print", "REAI/")
+                idaapi.attach_action_to_popup(form, popup, "REAI:conversation", "REAI/")
